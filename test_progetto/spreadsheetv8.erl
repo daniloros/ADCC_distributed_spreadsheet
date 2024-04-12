@@ -1,4 +1,4 @@
--module(spreadsheetv7).
+-module(spreadsheetv8).
 -author("daniros").
 
 
@@ -8,7 +8,7 @@
 
 
 %% API
--export([init/0, start/0, populate_cell/3, new/1, new/4, share/2, get_sheet/1]).
+-export([init/0, start/0, populate_cell/4, new/1, new/4, share/2, get_sheet/1]).
 
 
 init() ->
@@ -53,7 +53,7 @@ new(Name, N, M, K) ->
       {error, 'sheet alredy exists'};
     {atomic,false} ->
       try
-        {atomic, CellIds} = mnesia:transaction(fun() -> populate_cell(K, N, M) end),
+        {atomic, CellIds} = mnesia:transaction(fun() -> populate_cell(Name, K, N, M) end),
         %%  io:format("CellIds ~p\n", [CellIds]),
         F = fun() ->
           populate_sheet_page(Name, K, CellIds),
@@ -69,18 +69,19 @@ new(Name, N, M, K) ->
   end
 .
 
-populate_cell(NumSheetPage, NumRows, NumColumns) ->
+populate_cell(NameSheet, NumSheetPage, NumRows, NumColumns) ->
   Rows = lists:seq(1, NumRows),
   Columns = lists:seq(1, NumColumns),
   SheetPageNumber = lists:seq(1,NumSheetPage),
   CellIds = lists:foldl(
     fun(Sheet, Acc) ->
+      PageName = lists:concat([atom_to_list(NameSheet), integer_to_list(Sheet)]),
       SheetCellIds = lists:foldl(
         fun(Row, AccRows) ->
           RowCellIds = lists:foldl(
             fun(Column, AccColumns) ->
               Cell = #cell{
-                id = {Sheet, Row, Column},
+                id = {PageName, Row, Column},
                 row = Row,
                 column = Column,
                 value = undefined
@@ -126,19 +127,18 @@ get_sheet(SpreadsheetName) ->
 
 share(SpreadsheetName, AccessPolicies) ->
   F = fun() ->
-        case mnesia:dirty_read({sheet, SpreadsheetName}) of
-          %% torna una lista di sheet
-          [Sheet] ->
-            io:format("Sheet ~p ", [Sheet]),
-            NewSheet = Sheet#sheet{access_policies = AccessPolicies},
-            mnesia:write(NewSheet),
-            ok;
-          [] ->
-            {error, not_found}
-        end
+    case mnesia:dirty_read({sheet, SpreadsheetName}) of
+      %% torna una lista di sheet
+      [Sheet] ->
+        io:format("Sheet ~p ", [Sheet]),
+        NewSheet = Sheet#sheet{access_policies = AccessPolicies},
+        mnesia:write(NewSheet),
+        ok;
+      [] ->
+        {error, not_found}
+    end
       end,
   mnesia:transaction(F)
 .
 
-%% problema con le celle
-%% se faccio due new consecutivi si sovrascrivono
+%% problema con le celle risolto, cambiato l'id in {nometab,riga,colonna}

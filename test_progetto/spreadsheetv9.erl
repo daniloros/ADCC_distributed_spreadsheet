@@ -1,4 +1,4 @@
--module(spreadsheetv7).
+-module(spreadsheetv9).
 -author("daniros").
 
 
@@ -6,9 +6,12 @@
 -record(sheet_page, {name, cells_ids=[]}).
 -record(sheet, {name, sheet_page_ids=[], owner_pid, access_policies=[]}).
 
+-include_lib("stdlib/include/qlc.hrl").
+
 
 %% API
--export([init/0, start/0, populate_cell/3, new/1, new/4, share/2, get_sheet/1]).
+-export([init/0, start/0, populate_cell/4, new/1, new/4, share/2, get_sheet/1,
+  set_cell_value/5, get_cell_value/4]).
 
 
 init() ->
@@ -53,7 +56,7 @@ new(Name, N, M, K) ->
       {error, 'sheet alredy exists'};
     {atomic,false} ->
       try
-        {atomic, CellIds} = mnesia:transaction(fun() -> populate_cell(K, N, M) end),
+        {atomic, CellIds} = mnesia:transaction(fun() -> populate_cell(Name, K, N, M) end),
         %%  io:format("CellIds ~p\n", [CellIds]),
         F = fun() ->
           populate_sheet_page(Name, K, CellIds),
@@ -69,18 +72,19 @@ new(Name, N, M, K) ->
   end
 .
 
-populate_cell(NumSheetPage, NumRows, NumColumns) ->
+populate_cell(NameSheet, NumSheetPage, NumRows, NumColumns) ->
   Rows = lists:seq(1, NumRows),
   Columns = lists:seq(1, NumColumns),
   SheetPageNumber = lists:seq(1,NumSheetPage),
   CellIds = lists:foldl(
     fun(Sheet, Acc) ->
+      PageName = lists:concat([atom_to_list(NameSheet), integer_to_list(Sheet)]),
       SheetCellIds = lists:foldl(
         fun(Row, AccRows) ->
           RowCellIds = lists:foldl(
             fun(Column, AccColumns) ->
               Cell = #cell{
-                id = {Sheet, Row, Column},
+                id = {PageName, Row, Column},
                 row = Row,
                 column = Column,
                 value = undefined
@@ -126,19 +130,44 @@ get_sheet(SpreadsheetName) ->
 
 share(SpreadsheetName, AccessPolicies) ->
   F = fun() ->
-        case mnesia:dirty_read({sheet, SpreadsheetName}) of
-          %% torna una lista di sheet
-          [Sheet] ->
-            io:format("Sheet ~p ", [Sheet]),
-            NewSheet = Sheet#sheet{access_policies = AccessPolicies},
-            mnesia:write(NewSheet),
-            ok;
-          [] ->
-            {error, not_found}
-        end
+    case mnesia:dirty_read({sheet, SpreadsheetName}) of
+      %% torna una lista di sheet
+      [Sheet] ->
+        io:format("Sheet ~p ", [Sheet]),
+        NewSheet = Sheet#sheet{access_policies = AccessPolicies},
+        mnesia:write(NewSheet),
+        ok;
+      [] ->
+        {error, not_found}
+    end
       end,
   mnesia:transaction(F)
 .
 
-%% problema con le celle
-%% se faccio due new consecutivi si sovrascrivono
+%%get_cell_value(Name,Tab,Row,Column) ->
+%%  PageName = lists:concat([atom_to_list(Name), integer_to_list(Tab)]),
+%%  Q = qlc:q([X || X <- mnesia:table(cell),
+%%    X#cell.id == {PageName,Row,Column}
+%%  ]),
+%%  F = fun() -> qlc:e(Q) end,
+%%  {atomic, Val} = mnesia:transaction(F),
+%%  Val
+%%.
+get_cell_value(Name,Tab,Row,Column) ->
+  PageName = lists:concat([atom_to_list(Name), integer_to_list(Tab)]),
+  [Cell] = mnesia:dirty_read(cell, {PageName,Row,Column}),
+    io:format("Valore: ~p \n", [Cell#cell.value])
+.
+
+
+%%% Da Aggiungere controllo errori
+set_cell_value(Name,Tab,Row,Column, Value) ->
+  PageName = lists:concat([atom_to_list(Name), integer_to_list(Tab)]),
+  F = fun() ->
+      [Cell] = mnesia:read(cell, {PageName,Row,Column}),
+      UpdateCell = Cell#cell{value = Value},
+      mnesia:write(UpdateCell)
+    end,
+  {atomic, Val} = mnesia:transaction(F),
+  Val
+.
