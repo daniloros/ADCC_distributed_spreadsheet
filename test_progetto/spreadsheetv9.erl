@@ -53,7 +53,7 @@ new(Name) ->
 new(Name, N, M, K) ->
   case sheet_alredy_exists(Name) of
     {atomic,true} ->
-      {error, 'sheet alredy exists'};
+      {error, 'sheet already exists'};
     {atomic,false} ->
       try
         {atomic, CellIds} = mnesia:transaction(fun() -> populate_cell(Name, K, N, M) end),
@@ -153,6 +153,8 @@ share(SpreadsheetName, AccessPolicies) ->
 %%  {atomic, Val} = mnesia:transaction(F),
 %%  Val
 %%.
+
+%% TODO: Da aggiungere controllo errori
 get_cell_value(Name,Tab,Row,Column) ->
   PageName = lists:concat([atom_to_list(Name), integer_to_list(Tab)]),
   [Cell] = mnesia:dirty_read(cell, {PageName,Row,Column}),
@@ -160,7 +162,7 @@ get_cell_value(Name,Tab,Row,Column) ->
 .
 
 
-%%% Da Aggiungere controllo errori
+%%% TODO: Da Aggiungere controllo errori
 set_cell_value(Name,Tab,Row,Column, Value) ->
   PageName = lists:concat([atom_to_list(Name), integer_to_list(Tab)]),
   F = fun() ->
