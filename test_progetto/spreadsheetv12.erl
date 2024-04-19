@@ -248,3 +248,6 @@ to_csv(SpreadsheetName) ->
 %%% creo correttamente il file .CSV
 %%% il problema sta nel fatto che non è possibile farlo con un foglio che ha 2 tab
 %%% per il momento capire ora come fare il contrario, quindi da CSV a riempiere una tabella di Mnesia
+
+%%% mi sono accorto che l'ordine dei valori è sbagliato perchè il dirty match non tiene conto dell'ordine
+%%% capire come ordinarli
