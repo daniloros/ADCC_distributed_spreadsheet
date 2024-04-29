@@ -1,4 +1,4 @@
--module(spreadsheetv12).
+-module(spreadsheetv13).
 -author("daniros").
 
 
@@ -10,7 +10,8 @@
 
 %% API
 -export([init/0, start/0, populate_cell/4, new/1, new/4, share/2, get_sheet/1,
-  set_cell_value/5, get_cell_value/4, get_all_cell_values/1, to_csv/1]).
+  set_cell_value/5, get_cell_value/4, sheet_alredy_exists/1,
+  get_all_cell_values/1, to_csv/1, read_csv_file/1, get_row_column_count/1]).
 
 
 init() ->
@@ -50,12 +51,14 @@ new(Name) ->
 %%% Infine creo il foglio con il suo nome e conterrà il riferimento ai sui tab
 %%%-------------------------------------------------------------------
 new(Name, N, M, K) ->
+  io:format("entrato \n"),
+  io:format("entrato - Name: ~p\n", [Name]),
   case sheet_alredy_exists(Name) of
     {atomic,true} ->
       {error, 'sheet already exists'};
     {atomic,false} ->
       try
-        {atomic, CellIds} = mnesia:transaction(fun() -> populate_cell(Name, K, M, N) end),
+        {atomic, CellIds} = mnesia:transaction(fun() -> populate_cell(Name, K, N, M) end),
         %%  io:format("CellIds ~p\n", [CellIds]),
         F = fun() ->
           populate_sheet_page(Name, K, CellIds),
@@ -129,10 +132,15 @@ populate_sheet_page(SheetPageNumber, NumberSheetPage, RefCell) ->
 .
 
 sheet_alredy_exists(Name) ->
+  io:format("check if exist \n"),
   F = fun() ->
     case mnesia:dirty_read({sheet, Name}) of
-      [] -> false;
-      _  -> true
+      [] ->
+        io:format("vuoto\n"),
+        false;
+      _  ->
+        io:format("esiste \n"),
+        true
     end
       end,
   mnesia:transaction(F)
@@ -215,12 +223,10 @@ get_row_values(SpreadsheetName, Rows) ->
   RowCells = mnesia:dirty_match_object({cell, {SpreadsheetName, Rows, '_'}, '_', '_', '_'}),
 %%  io:format("RowCells ~p\n", [RowCells]),
 
-  %% costretto ad ordinarle, altrimenti il dirty_match_object non torna dati ordinati %%%
-  %%% devo confrontare in base all'indice della colonna %%%
+  %% costretto ad ordinare RowCells, altrimenti il dirty_match_object non torna dati ordinati %%%
+  %% devo confrontare in base all'indice della colonna %%
   SortedCells = lists:sort(fun(A, B) -> A#cell.column < B#cell.column end, RowCells),
 %%  io:format("SortedCells ~p\n", [SortedCells]),
-
-
   [Value || #cell{value = Value} <- SortedCells].
 
 
@@ -229,14 +235,14 @@ to_csv(SpreadsheetName) ->
     [Data] ->
       io:format("Data ~p\n", [Data]),
       CsvRows = lists:map(
-          fun(Row) ->
+        fun(Row) ->
 %%            io:format("Row ~p\n", [Row]),
-            %% per ogni row converto in intero le concateno separate da virgole e a fine riga vado a capo %%
-            RowStrings = [integer_to_list(X) || X <- Row],
-            CsvRow = string:join(RowStrings, ",") ++ "\n",
+          %% per ogni row converto in intero le concateno separate da virgole e a fine riga vado a capo %%
+          RowStrings = [integer_to_list(X) || X <- Row],
+          CsvRow = string:join(RowStrings, ",") ++ "\n",
 %%            io:format("CSVRow ~p\n", [CsvRow]),
-            CsvRow
-          end,
+          CsvRow
+        end,
         Data),
 
       %% "appiattisco" le stringhe per scriverle nel .csv, passaggio necessario per il write_file %%
@@ -251,8 +257,45 @@ to_csv(SpreadsheetName) ->
   end.
 
 
-%%% creo correttamente il file .CSV
-%%% il problema sta nel fatto che non è possibile farlo con un foglio che ha 2 tab
-%%% per il momento capire ora come fare il contrario, quindi da CSV a riempiere una tabella di Mnesia
+read_csv_file(FilePath) ->
+  {ok, File} = file:open(FilePath, [read]),
+  BaseName = filename:basename(FilePath),
+  NameWithoutExtension = list_to_atom(string:substr(BaseName, 1, string:rstr(BaseName, ".") - 1)),
+  io:format("BaseName ~p\n",[BaseName]),
+  io:format("NameWithoutExtension ~p\n",[NameWithoutExtension]),
+  CsvData = read_lines(File, []),
+  {RowCount, ColumnCount} = get_row_column_count(CsvData),
+  io:format("Count Row ~p\n", [RowCount]),
+  io:format("Count Column ~p\n", [ColumnCount]),
+  case new(NameWithoutExtension, RowCount, ColumnCount, 1) of
+    {error, 'sheet already exists'} -> io:format("somaro \n");
+%%    _ -> ok, {CsvData, RowCount, ColumnCount}
+    _ -> ok
+  end,
+  {CsvData, RowCount, ColumnCount}
+.
 
-%%% mi sono accorto che l'ordine dei valori è sbagliato perchè il dirty match non tiene conto dell'ordine
+
+read_lines(File, Acc) ->
+  case file:read_line(File) of
+    {ok, Line} ->
+      Tokens = string:tokens(Line, ","),
+      read_lines(File, [Tokens | Acc]);
+    eof ->
+      file:close(File),
+      lists:reverse(Acc);
+    {error, Reason} ->
+      file:close(File),
+      {error, Reason}
+  end.
+
+
+get_row_column_count(CsvData) ->
+  RowCount = length(CsvData),
+  ColumnCount = lists:max(lists:map(fun(L) -> length(L) end, CsvData)),
+  {RowCount, ColumnCount}.
+
+
+
+%%Capire come utilizzare il CvsData per poter iterare su righe e colonne e scrivere il relativo
+%%valore sulla cella
