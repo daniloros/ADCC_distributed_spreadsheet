@@ -1,4 +1,4 @@
--module(spreadsheetv14).
+-module(spreadsheetv15).
 -author("daniros").
 
 
@@ -10,8 +10,8 @@
 
 %% API
 -export([init/0, start/0, populate_cell/4, new/1, new/4, share/2, get_sheet/1,
-  set_cell_value/5, get_cell_value/4, sheet_alredy_exists/1,
-  get_all_cell_values/1, to_csv/1, read_csv_file/1, get_row_column_count/1]).
+  set/5, get/4, sheet_alredy_exists/1,
+  get_all_cell_values/1, to_csv/1, from_cvs/1, get_row_column_count/1]).
 
 
 init() ->
@@ -155,9 +155,9 @@ share(SpreadsheetName, AccessPolicies) ->
     case mnesia:dirty_read({sheet, SpreadsheetName}) of
       %% torna una lista di sheet
       [Sheet] ->
-        io:format("Sheet ~p ", [Sheet]),
-        OldPolicies = Sheet#sheet.access_policies,
-        NewSheet = Sheet#sheet{access_policies = OldPolicies ++ AccessPolicies},
+%%        io:format("Sheet ~p ", [Sheet]),
+        NewAccessPolicies = update_access_policies(Sheet#sheet.access_policies, AccessPolicies),
+        NewSheet = Sheet#sheet{access_policies = NewAccessPolicies},
         mnesia:write(NewSheet),
         ok;
       [] ->
@@ -167,8 +167,26 @@ share(SpreadsheetName, AccessPolicies) ->
   mnesia:transaction(F)
 .
 
+update_access_policies(OldPolicies, NewPolicies) ->
+  % Itero su ogni nuova policy
+  lists:foreach(
+    fun({NewProc, NewAP}) ->
+      % Verifica se il PID è già presente nelle policy esistenti
+      case lists:keysearch(NewProc, 1, OldPolicies) of
+        % già presente
+        {value, {NewProc, _}} ->
+          %% lists:keyreplace(Key, Position, List, NewTuple)
+          %% quindi devo rimpiazziare la specifica old con quella nuova
+          OldPolicies = lists:keyreplace(NewProc, 1, OldPolicies, {NewProc, NewAP});
+        % non presente
+        false ->
+          OldPolicies = [{NewProc, NewAP} | OldPolicies]
+      end
+    end,
+    NewPolicies).
+
 %% TODO: Da aggiungere controllo errori
-get_cell_value(Name,Tab,Row,Column) ->
+get(Name,Tab,Row,Column) ->
   PageName = lists:concat([atom_to_list(Name), integer_to_list(Tab)]),
   [Cell] = mnesia:dirty_read(cell, {PageName,Row,Column}),
   io:format("Valore: ~p \n", [Cell#cell.value])
@@ -176,7 +194,7 @@ get_cell_value(Name,Tab,Row,Column) ->
 
 
 %%% TODO: Da Aggiungere controllo errori
-set_cell_value(Name,Tab,Row,Column, Value) ->
+set(Name,Tab,Row,Column, Value) ->
   PageName = lists:concat([atom_to_list(Name), integer_to_list(Tab)]),
   F = fun() ->
     [Cell] = mnesia:read(cell, {PageName,Row,Column}),
@@ -257,7 +275,7 @@ to_csv(SpreadsheetName) ->
   end.
 
 
-read_csv_file(FilePath) ->
+from_cvs(FilePath) ->
   {ok, File} = file:open(FilePath, [read]),
   BaseName = filename:basename(FilePath),
   NameWithoutExtension = list_to_atom(string:substr(BaseName, 1, string:rstr(BaseName, ".") - 1)),
@@ -282,7 +300,7 @@ read_csv_file(FilePath) ->
 %%              io:format("Value is: ~p\n", [ValueString]),
               CleanValue = string:strip(ValueString, right, $\n),
 %%              io:format("OK - CleanValue is: ~p\n", [CleanValue]),
-              set_cell_value(NameWithoutExtension, 1, RowIndex, ColumnIndex, CleanValue)
+              set(NameWithoutExtension, 1, RowIndex, ColumnIndex, CleanValue)
             end,
             ColumnCounter)
         end,
@@ -312,12 +330,3 @@ get_row_column_count(CsvData) ->
   ColumnCount = lists:max(lists:map(fun(L) -> length(L) end, CsvData)),
   {RowCount, ColumnCount}.
 
-
-%%% ORA RIESCO A CREARE DA UN FOGLIO EXCEL LA TABELLA MNESIA
-%%% DA CAPIRE COSA SUCCEDE PER TIPO DI DATO, SE AD ESEMPIO HO STRINGHE O BOOLEANI COME LI GESTISCO?
-%%% SE HO NUMERI MA STRINGHE AD ESEMPIO "10" COME LI GESTISCO? PERCHE' AL MOMENTO SE HO UN CSV
-%%% FATTO DA INTERI LI CONVERTO COME STRINGHE, DOVREI QUINDI RICONVERTIRLI?
-
-%%% UPDATE: DA MIGLIORARE LA FUNZIONE DI SHARE, AL MOMENTO SCRIVE SOLTANTO COSE NUOVE
-%%% DA CAPIRE COME PERMETTERE DI AGGIORNARE QUELLE GIA' ESISTENTI,
-%%% DA GOOGLE PER LE LISTE HO TROVATO LA KEYREPLACE CAPIRE COME FUNZIONA
