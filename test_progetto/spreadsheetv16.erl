@@ -1,4 +1,4 @@
--module(spreadsheetv15).
+-module(spreadsheetv16).
 -author("daniros").
 
 
@@ -187,22 +187,57 @@ update_access_policies(OldPolicies, NewPolicies) ->
 
 %% TODO: Da aggiungere controllo errori
 get(Name,Tab,Row,Column) ->
+  Timeout = 5000,
+  Self = self(),
   PageName = lists:concat([atom_to_list(Name), integer_to_list(Tab)]),
-  [Cell] = mnesia:dirty_read(cell, {PageName,Row,Column}),
-  io:format("Valore: ~p \n", [Cell#cell.value])
+  _Pid = spawn(fun() -> do_get(PageName, Row, Column, Self) end),
+  receive
+    {result, Result} -> ok, io:format("Value is: ~p\n",[Result]);
+    {error, not_found} -> {error, not_found}
+  after Timeout -> {error, timeout}
+  end
 .
+
+do_get(PageName, Row, Column, Ref) ->
+  case mnesia:dirty_read(cell, {PageName, Row, Column}) of
+    [Cell] ->
+      Result = Cell#cell.value,
+      Ref!{result, Result}; % Invia il risultato al processo chiamante
+    [] ->
+      Ref ! {error, not_found} % Invia un messaggio di "non trovato"
+  end.
 
 
 %%% TODO: Da Aggiungere controllo errori
 set(Name,Tab,Row,Column, Value) ->
+  Timeout = 1000,
+  Self = self(),
   PageName = lists:concat([atom_to_list(Name), integer_to_list(Tab)]),
+  TimerRef = erlang:send_after(Timeout, self(), timeout),
+  _Pid = spawn(fun() -> do_set(PageName, Row, Column, Value, Self, TimerRef) end),
+  receive
+    {ok, Val} -> Val;
+    {error, not_found} -> {error, not_found};
+    {error, timeout} -> {error, timeout}
+  after Timeout -> {error, timeout}
+  end
+.
+
+do_set(PageName, Row, Column, Value, Ref, TimerRef) ->
+ timer:sleep(3000),
   F = fun() ->
     [Cell] = mnesia:read(cell, {PageName,Row,Column}),
     UpdateCell = Cell#cell{value = Value},
     mnesia:write(UpdateCell)
       end,
-  {atomic, Val} = mnesia:transaction(F),
-  Val
+  case mnesia:transaction(F) of
+    {atomic, Val} ->
+      Ref!{ok,Val},
+      erlang:cancel_timer(TimerRef);
+    {aborted, _Reason} ->
+      Ref!{error, not_found},
+      erlang:cancel_timer(TimerRef)
+  end
 .
 
 get_all_cell_values(SpreadsheetName) ->
@@ -329,7 +364,3 @@ get_row_column_count(CsvData) ->
   RowCount = length(CsvData),
   ColumnCount = lists:max(lists:map(fun(L) -> length(L) end, CsvData)),
   {RowCount, ColumnCount}.
-
-
-
-%%% IMPLEMENTARE LA GESTIONE DEI TIMEOUT, USARE I MONITOR?
