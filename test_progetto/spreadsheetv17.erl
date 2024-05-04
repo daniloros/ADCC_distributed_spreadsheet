@@ -1,4 +1,4 @@
--module(spreadsheetv16).
+-module(spreadsheetv17).
 -author("daniros").
 
 
@@ -151,39 +151,50 @@ get_sheet(SpreadsheetName) ->
 .
 
 share(SpreadsheetName, AccessPolicies) ->
+  Self = self(),
   F = fun() ->
-    case mnesia:dirty_read({sheet, SpreadsheetName}) of
-      %% torna una lista di sheet
-      [Sheet] ->
-%%        io:format("Sheet ~p ", [Sheet]),
-        NewAccessPolicies = update_access_policies(Sheet#sheet.access_policies, AccessPolicies),
-        NewSheet = Sheet#sheet{access_policies = NewAccessPolicies},
-        mnesia:write(NewSheet),
-        ok;
-      [] ->
-        {error, not_found}
-    end
+        case mnesia:dirty_read({sheet, SpreadsheetName}) of
+          %% torna una lista di sheet
+          [Sheet] ->
+            io:format("Sheet ~p\n ", [Sheet]),
+            %% controllo se chi chiama l'operazione è l'admin del foglio
+            case Sheet#sheet.owner_pid =:= Self of
+              true ->
+                NewAccessPolicies = update_access_policies(Sheet#sheet.access_policies, AccessPolicies),
+                io:format("NewAccessPolicies ~p\n ", [NewAccessPolicies]),
+                NewSheet = Sheet#sheet{access_policies = NewAccessPolicies},
+                mnesia:write(NewSheet),
+                ok;
+              false -> {error, not_admin}
+            end;
+          [] ->
+            {error, not_found}
+        end
       end,
   mnesia:transaction(F)
 .
 
 update_access_policies(OldPolicies, NewPolicies) ->
-  % Itero su ogni nuova policy
-  lists:foreach(
-    fun({NewProc, NewAP}) ->
-      % Verifica se il PID è già presente nelle policy esistenti
-      case lists:keysearch(NewProc, 1, OldPolicies) of
-        % già presente
-        {value, {NewProc, _}} ->
-          %% lists:keyreplace(Key, Position, List, NewTuple)
-          %% quindi devo rimpiazziare la specifica old con quella nuova
-          OldPolicies = lists:keyreplace(NewProc, 1, OldPolicies, {NewProc, NewAP});
-        % non presente
+  lists:foldl(
+    fun({NewProc, NewAP}, Acc) ->
+      io:format("Acc ~p\n", [Acc]),
+      io:format("NewProc ~p\n", [NewProc]),
+
+      case lists:keymember(NewProc, 1, OldPolicies) of
+        true ->
+          % If the process already has a policy, update it
+          lists:keyreplace(NewProc, 1, Acc, {NewProc, NewAP});
         false ->
-          OldPolicies = [{NewProc, NewAP} | OldPolicies]
+          % If the process doesn't have a policy, add it
+          [{NewProc, NewAP} | Acc]
       end
     end,
-    NewPolicies).
+    OldPolicies,
+    NewPolicies
+  )
+.
+
+
 
 %% TODO: Da aggiungere controllo errori
 get(Name,Tab,Row,Column) ->
@@ -224,7 +235,7 @@ set(Name,Tab,Row,Column, Value) ->
 .
 
 do_set(PageName, Row, Column, Value, Ref, TimerRef) ->
- timer:sleep(3000),
+  timer:sleep(3000),
   F = fun() ->
     [Cell] = mnesia:read(cell, {PageName,Row,Column}),
     UpdateCell = Cell#cell{value = Value},
@@ -366,6 +377,14 @@ get_row_column_count(CsvData) ->
   {RowCount, ColumnCount}.
 
 
+%%% FUNZIONE SHARE SEMBRA OK > DA FARE TEST
 
-%%% IL METODO SHARE CONTINUA A NON FUNZIONARE, IL PROBLEMA STA NEL FOREACH E IN PARTICOLARE SU
-%%% OldPolicies = [{NewProc, NewAP} | OldPolicies], NON POSSO MODIFICARLA, DEVO CAMBIARLA CON IL FOLDL
+%%% COSE RIMANENTI:
+%%% ORA CHE LO SHARE FUNZIONA, AGGIUNGERE I CONTROLLI SULLE OPERAZIONI AD ESEMPIO
+%%% GET POSSO FARLA SE HO I DIRITTI DI LETTURA O SCRITTURA
+%%% SET SOLO SE HO I DIRITTI DI SCRITTURA
+
+%%% CAPIRE SE PER I TIMEOUT POSSO USARE ABORT DI MNESIA (VEDI DOCUMENTAZIONE)
+
+%%% ANCORA DA IMPLEMENTARE LA FUNZIONE INFO
+
