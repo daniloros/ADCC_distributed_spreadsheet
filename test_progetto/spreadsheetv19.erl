@@ -202,8 +202,15 @@ check_policy_access(NameSpreadsheet, Process) ->
   case mnesia:dirty_read({sheet, NameSpreadsheet}) of
     [Sheet] ->
       AccessPolicies = Sheet#sheet.access_policies,
-      io:format("Risultato ~p\n", [lists:keyfind(Process, 1, AccessPolicies)]),
-      lists:keyfind(Process, 1, AccessPolicies);
+      Owner = Sheet#sheet.owner_pid,
+      case Owner =:= Process of
+        true ->
+%%          io:format("Sei l'owner, hai tutti i diritti \n"),
+          {true,true};
+        false ->
+%%          io:format("Risultato ~p\n", [lists:keyfind(Process, 1, AccessPolicies)]),
+          lists:keyfind(Process, 1, AccessPolicies)
+      end;
     [] -> not_found
   end
 .
@@ -440,3 +447,4 @@ info(Name) ->
 %%% AGGIUNRE IL TIMEOUT ALLE OPERAZIONI DEL CVS E AGGIUNGERE ANCHE IL CHECK PER I PERMESSI
 
 %%% TO_CVS DA CORREGGERE, PERCHE' SE CONTIENE STRINGHE ALLORA SI SPACCA
+
