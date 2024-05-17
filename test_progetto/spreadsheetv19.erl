@@ -14,7 +14,7 @@
 
 
 init() ->
-  mnesia:create_schema([node()]),
+  mnesia:create_schema([node()|nodes()]),
   mnesia:start(),
   create_tables(),
   mnesia:stop()
@@ -62,7 +62,7 @@ new(Name, N, M, K) ->
         F = fun() ->
           populate_sheet_page(Name, K, CellIds),
           SheetPageRef = lists:seq(1,K),
-          Sheet = #sheet{name = Name, sheet_page_ids = SheetPageRef, owner_pid = self()},
+          Sheet = #sheet{name = Name, sheet_page_ids = SheetPageRef, owner_pid = node()},
           mnesia:write(Sheet)
             end,
         {atomic, Val} = mnesia:transaction(F),
@@ -150,15 +150,15 @@ get_sheet(SpreadsheetName) ->
 .
 
 share(SpreadsheetName, AccessPolicies) ->
-  Self = self(),
-  io:format("self ~p\n", [Self]),
+  Node = node(),
+  io:format("self ~p\n", [Node]),
   F = fun() ->
-    case mnesia:dirty_read({sheet, SpreadsheetName}) of
+    case mnesia:read({sheet, SpreadsheetName}) of
       %% torna una lista di sheet
       [Sheet] ->
         io:format("Sheet ~p\n ", [Sheet]),
         %% controllo se chi chiama l'operazione è l'admin del foglio
-        case Sheet#sheet.owner_pid =:= Self of
+        case Sheet#sheet.owner_pid =:= Node of
           true ->
             NewAccessPolicies = update_access_policies(Sheet#sheet.access_policies, AccessPolicies),
             io:format("NewAccessPolicies ~p\n ", [NewAccessPolicies]),
@@ -171,7 +171,9 @@ share(SpreadsheetName, AccessPolicies) ->
         {error, not_found}
     end
       end,
-  mnesia:transaction(F)
+  TransactionResult = mnesia:transaction(F),
+  io:format("Transaction result: ~p\n", [TransactionResult]),
+  TransactionResult
 .
 
 update_access_policies(OldPolicies, NewPolicies) ->
@@ -182,9 +184,11 @@ update_access_policies(OldPolicies, NewPolicies) ->
 
       case lists:keymember(NewProc, 1, OldPolicies) of
         true ->
+          io:format("Replace ~p\n", [NewProc]),
           % If the process already has a policy, update it
           lists:keyreplace(NewProc, 1, Acc, {NewProc, NewAP});
         false ->
+          io:format("Add new ~p\n", [NewProc]),
           % If the process doesn't have a policy, add it
           [{NewProc, NewAP} | Acc]
       end
@@ -205,41 +209,53 @@ check_policy_access(NameSpreadsheet, Process) ->
 .
 
 %% TODO: Vedere per il timeout l'abort amnesia
-get(Name,Tab,Row,Column) ->
-  Timeout = 5000,
+get(Name, Tab, Row, Column) ->
+  Timeout = 10000,
   Self = self(),
+  Node = node(),
 %%  io:format("SELF ~p\n", [Self]),
-  case check_policy_access(Name, Self) of
+  case check_policy_access(Name, Node) of
     {_, _} ->
       PageName = lists:concat([atom_to_list(Name), integer_to_list(Tab)]),
       _Pid = spawn(fun() -> do_get(PageName, Row, Column, Self) end),
+%%      io:format("Spawned process: ~p\n", [Pid]),
       receive
-        {result, Result} -> ok, io:format("Value is: ~p\n",[Result]);
+        {result, Result} ->
+%%          io:format("Value is: ~p\n", [Result]),
+          {ok, Result};
         {error, not_found} -> {error, not_found}
-      after Timeout -> {error, timeout}
+      after Timeout ->
+%%        io:format("Timeout waiting for response\n"),
+        {error, timeout}
       end;
-    not_found -> io:format("ERROR - spreadsheet non esistente\n");
-    false -> io:format("ERROR - Non hai i diritti per accedere al file\n")
+    not_found -> io:format("ERROR - spreadsheet non esistente\n"),
+      {error, not_found};
+    false -> io:format("ERROR - Non hai i diritti per accedere al file\n"),
+      {error, no_access}
   end
 .
 
 do_get(PageName, Row, Column, Ref) ->
-%%  timer:sleep(6000),
+%%  io:format("do_get called with PageName: ~p, Row: ~p, Column: ~p\n", [PageName, Row, Column]),
   case mnesia:dirty_read(cell, {PageName, Row, Column}) of
     [Cell] ->
       Result = Cell#cell.value,
-      Ref!{result, Result}; % Invia il risultato al processo chiamante
+%%      io:format("do_get, Result: ~p\n", [Result]),
+      Ref ! {result, Result}; % Invia il risultato al processo chiamante
     [] ->
+%%      io:format("do_get, Cell not found\n"),
       Ref ! {error, not_found} % Invia un messaggio di "non trovato"
-  end.
+  end
+.
 
 
 %% TODO: Vedere per il timeout l'abort amnesia
 set(Name,Tab,Row,Column, Value) ->
   Timeout = 5000,
   Self = self(),
+  Node = node(),
   PageName = lists:concat([atom_to_list(Name), integer_to_list(Tab)]),
-  case check_policy_access(Name, Self) of
+  case check_policy_access(Name, Node) of
     {_,write} ->
       _Pid = spawn(fun() -> do_set(PageName, Row, Column, Value, Self) end),
       receive
@@ -256,7 +272,7 @@ set(Name,Tab,Row,Column, Value) ->
 .
 
 do_set(PageName, Row, Column, Value, Ref) ->
-  timer:sleep(6000),
+%%  timer:sleep(6000),
   F = fun() ->
     [Cell] = mnesia:read(cell, {PageName,Row,Column}),
     UpdateCell = Cell#cell{value = Value},
@@ -397,7 +413,7 @@ get_row_column_count(CsvData) ->
 
 
 info(Name) ->
-  Process = self(),
+  Process = node(),
   io:format("self ~p\n", [Process]),
   case get_sheet(Name) of
     [Sheet] ->
@@ -423,5 +439,4 @@ info(Name) ->
 
 %%% AGGIUNRE IL TIMEOUT ALLE OPERAZIONI DEL CVS E AGGIUNGERE ANCHE IL CHECK PER I PERMESSI
 
-
-
+%%% TO_CVS DA CORREGGERE, PERCHE' SE CONTIENE STRINGHE ALLORA SI SPACCA
