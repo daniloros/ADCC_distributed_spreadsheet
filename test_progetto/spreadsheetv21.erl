@@ -235,7 +235,6 @@ get(Name, Tab, Row, Column) ->
 .
 
 %%% GET con Timeout
-%% TODO: Vedere per il timeout l'abort amnesia
 get(Name, Tab, Row, Column,Timeout) ->
 %%  io:format("timeout ~p\n", [Timeout]),
   Self = self(),
@@ -318,7 +317,6 @@ set(Name,Tab,Row,Column, Value) ->
 .
 
 %% SET con Timeout
-%% TODO: Vedere per il timeout l'abort amnesia
 set(Name,Tab,Row,Column, Value, Timeout) ->
   Self = self(),
   Node = node(),
