@@ -244,7 +244,7 @@ get(Name, Tab, Row, Column,Timeout) ->
   case check_policy_access(Name, Node) of
     {_, _} ->
       PageName = lists:concat([atom_to_list(Name), integer_to_list(Tab)]),
-      _Pid = spawn(fun() -> do_get(PageName, Row, Column, Self) end),
+      Caller = spawn(fun() -> do_get(PageName, Row, Column, Self) end),
 %%      io:format("Spawned process: ~p\n", [_Pid]),
       receive
         {result, Result} ->
@@ -253,6 +253,7 @@ get(Name, Tab, Row, Column,Timeout) ->
         {error, not_found} -> {error, not_found}
       after Timeout ->
 %%        io:format("Timeout waiting for response\n"),
+        exit(Caller, kill),
         {error, timeout}
       end;
     not_found -> io:format("ERROR - spreadsheet non esistente\n"),
@@ -263,7 +264,7 @@ get(Name, Tab, Row, Column,Timeout) ->
 .
 
 do_get(PageName, Row, Column, Ref) ->
-  timer:sleep(6000),
+  timer:sleep(2000),
   case mnesia:dirty_read(cell, {PageName, Row, Column}) of
     [Cell] ->
       Result = Cell#cell.value,
@@ -305,8 +306,9 @@ set(Name,Tab,Row,Column, Value) ->
           end,
 
       case mnesia:transaction(F) of
-        {atomic, Val} -> {ok,Val};
-        {aborted, _Reason} -> {error, not_found}
+        {atomic, ok} -> true;
+        {atomic, {error, not_found}} -> false;
+        {aborted, _Reason} -> {false}
       end;
     {_,read} -> io:format("Puoi solo leggere il file\n");
     {_,_} -> {error, wrong_policies};
@@ -323,20 +325,12 @@ set(Name,Tab,Row,Column, Value, Timeout) ->
   PageName = lists:concat([atom_to_list(Name), integer_to_list(Tab)]),
   case check_policy_access(Name, Node) of
     {_,write} ->
-      _Pid = spawn(fun() -> do_set(PageName, Row, Column, Value, Self) end),
-      receive
-        {ok, Val} -> Val;
-        {error, not_found} -> {error, not_found};
-        {error, timeout} -> {error, timeout}
-      after Timeout -> {error, timeout}
-      end;
+      Caller = spawn(fun() -> do_set(PageName, Row, Column, Value, Self) end),
+      receive_response(Caller, Timeout);
     {_,true} ->
-      _Pid = spawn(fun() -> do_set(PageName, Row, Column, Value, Self) end),
-      receive
-        {ok, Val} -> Val;
-        {error, not_found} -> {error, not_found};
-        {error, timeout} -> {error, timeout}
-      end;
+%%      io:format("true case\n"),
+      Caller = spawn(fun() -> do_set(PageName, Row, Column, Value, Self) end),
+      receive_response(Caller, Timeout);
     {_,read} -> io:format("Puoi solo leggere il file\n");
     {_,_} -> {error, wrong_policies};
     not_found -> io:format("ERROR - spreadsheet non esistente\n");
@@ -344,18 +338,31 @@ set(Name,Tab,Row,Column, Value, Timeout) ->
   end
 .
 
+receive_response(Caller, Timeout) ->
+  receive
+    {ok, true} -> true;
+    {error, not_found} -> false;
+    {error, error} -> transaction_failed
+  after Timeout ->
+    exit(Caller, kill),
+    {error, timeout}
+  end.
+
+
 do_set(PageName, Row, Column, Value, Ref) ->
-  timer:sleep(6000),
+  timer:sleep(2000),
   F = fun() ->
     [Cell] = mnesia:read(cell, {PageName,Row,Column}),
+    io:format("Cell ~p\n", [Cell]),
     UpdateCell = Cell#cell{value = Value},
     mnesia:write(UpdateCell)
       end,
-  case mnesia:transaction(F) of
-    {atomic, Val} ->
-      Ref!{ok,Val};
-    {aborted, _Reason} ->
-      Ref!{error, not_found}
+  Result = mnesia:transaction(F),
+  io:format("Result ~p\n", [Result]),
+  case Result of
+    {atomic, ok} -> Ref!{ok, true};
+    {atomic, {error, not_found}} -> Ref!{error, not_found};
+      {aborted, _Reason} -> Ref!{error, error}
   end
 .
 
@@ -615,10 +622,6 @@ info(Name) ->
       {error, not_found}
   end
 .
-
-
-%%% CAPIRE SE PER I TIMEOUT POSSO USARE ABORT DI MNESIA (VEDI DOCUMENTAZIONE)
-%%% DA QUANDO HO DIVISO LE DUE FUNZIONI NON FUNZIONA PIU' CORRETTAMENTE, CAPIRE PERCHE'
 
 
 %%% ok timeout per cvs, aggiungere case per open:file perchè se è il file non esiste ritorna:
