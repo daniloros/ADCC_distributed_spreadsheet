@@ -146,7 +146,12 @@ sheet_alredy_exists(Name) ->
 .
 
 get_sheet(SpreadsheetName) ->
-  mnesia:dirty_read({sheet, SpreadsheetName})
+  Sheet = mnesia:dirty_read({sheet, SpreadsheetName}),
+  case Sheet of
+    [] -> {error, not_found};
+    [{_,_,_,_,_}] -> Sheet
+  end
+
 .
 
 share(SpreadsheetName, AccessPolicies) ->
@@ -369,8 +374,7 @@ get_all_cell_values(SpreadsheetName) ->
     [Sheet] ->
       SheetPages = Sheet#sheet.sheet_page_ids,
       [get_cell_values(SpreadsheetName, Page) || Page <- SheetPages];
-    _ ->
-      {error, not_found}
+    _ -> {error, not_found}
   end.
 
 get_cell_values(SpreadsheetName, PageName) ->
@@ -486,8 +490,7 @@ do_to_cvs(SpreadsheetName, Parent) ->
              FilePath = StringSpreadsheetName ++ ".csv",
              file:write_file(FilePath, CsvContent),
              Parent ! {csv_data, FilePath};
-           {error, Reason} ->
-             {error, Reason}
+           {error, Reason} ->  Parent ! {error, Reason}
          end
   end
 .
@@ -500,7 +503,8 @@ from_cvs(FilePath, Timeout) ->
   Parent = self(),
   Caller = spawn(fun() -> do_from_cvs(FilePath, Parent) end),
   receive
-    {csv_data, Data} -> {ok, Data}
+    {ok, ok} -> ok;
+    {error, Reason} -> {error, Reason}
   after Timeout ->
     exit(Caller, kill),
     {error, timeout}
@@ -510,70 +514,78 @@ from_cvs(FilePath, Timeout) ->
 do_from_cvs(FilePath, Parent) ->
   case Parent of
     null ->
-      {ok, File} = file:open(FilePath, [read]),
-      BaseName = filename:basename(FilePath),
-      NameWithoutExtension = list_to_atom(string:substr(BaseName, 1, string:rstr(BaseName, ".") - 1)),
-      io:format("BaseName ~p\n",[BaseName]),
-      io:format("NameWithoutExtension ~p\n",[NameWithoutExtension]),
-      CsvData = read_lines(File, []),
-      {RowCount, ColumnCount} = get_row_column_count(CsvData),
-      io:format("Count Row ~p\n", [RowCount]),
-      io:format("Count Column ~p\n", [ColumnCount]),
-      case new(NameWithoutExtension, RowCount, ColumnCount, 1) of
-        {error, 'sheet already exists'} -> io:format("Foglio già esistente, cambiare il nome \n");
-        _ ->
-          RowCounter = lists:seq(1,RowCount),
-          ColumnCounter = lists:seq(1, ColumnCount),
-          lists:foreach(
-            fun(RowIndex) ->
-              Row = lists:nth(RowIndex, CsvData),
-              io:format("Row: ~p\n", [Row]),
+      case file:open(FilePath, [read]) of
+        {ok, File} ->
+          BaseName = filename:basename(FilePath),
+          NameWithoutExtension = list_to_atom(string:substr(BaseName, 1, string:rstr(BaseName, ".") - 1)),
+          io:format("BaseName ~p\n",[BaseName]),
+          io:format("NameWithoutExtension ~p\n",[NameWithoutExtension]),
+          CsvData = read_lines(File, []),
+          {RowCount, ColumnCount} = get_row_column_count(CsvData),
+          io:format("Count Row ~p\n", [RowCount]),
+          io:format("Count Column ~p\n", [ColumnCount]),
+          case new(NameWithoutExtension, RowCount, ColumnCount, 1) of
+            {error, 'sheet already exists'} -> io:format("Foglio già esistente, cambiare il nome \n");
+            _ ->
+              RowCounter = lists:seq(1,RowCount),
+              ColumnCounter = lists:seq(1, ColumnCount),
               lists:foreach(
-                fun(ColumnIndex) ->
-                  ValueString = lists:nth(ColumnIndex, Row),
+                fun(RowIndex) ->
+                  Row = lists:nth(RowIndex, CsvData),
+                  io:format("Row: ~p\n", [Row]),
+                  lists:foreach(
+                    fun(ColumnIndex) ->
+                      ValueString = lists:nth(ColumnIndex, Row),
 %%              io:format("Value is: ~p\n", [ValueString]),
-                  CleanValue = string:strip(ValueString, right, $\n),
+                      CleanValue = string:strip(ValueString, right, $\n),
 %%              io:format("OK - CleanValue is: ~p\n", [CleanValue]),
-                  set(NameWithoutExtension, 1, RowIndex, ColumnIndex, CleanValue)
+                      set(NameWithoutExtension, 1, RowIndex, ColumnIndex, CleanValue)
+                    end,
+                    ColumnCounter)
                 end,
-                ColumnCounter)
-            end,
-            RowCounter),
-          ok
-        %%  {CsvData, RowCount, ColumnCount}
+                RowCounter),
+              %%  {CsvData, RowCount, ColumnCount},
+              ok
+          end;
+        {error, Reason} -> {error, Reason}
       end;
     _ ->
+      io:format("timeout\n"),
       timer:sleep(2000),
-      {ok, File} = file:open(FilePath, [read]),
-      BaseName = filename:basename(FilePath),
-      NameWithoutExtension = list_to_atom(string:substr(BaseName, 1, string:rstr(BaseName, ".") - 1)),
-      io:format("BaseName ~p\n",[BaseName]),
-      io:format("NameWithoutExtension ~p\n",[NameWithoutExtension]),
-      CsvData = read_lines(File, []),
-      {RowCount, ColumnCount} = get_row_column_count(CsvData),
-      io:format("Count Row ~p\n", [RowCount]),
-      io:format("Count Column ~p\n", [ColumnCount]),
-      case new(NameWithoutExtension, RowCount, ColumnCount, 1) of
-        {error, 'sheet already exists'} -> io:format("somaro \n");
-        _ ->
-          RowCounter = lists:seq(1,RowCount),
-          ColumnCounter = lists:seq(1, ColumnCount),
-          lists:foreach(
-            fun(RowIndex) ->
-              Row = lists:nth(RowIndex, CsvData),
-              io:format("Row: ~p\n", [Row]),
+      case file:open(FilePath, [read]) of
+        {ok, File} ->
+          BaseName = filename:basename(FilePath),
+          NameWithoutExtension = list_to_atom(string:substr(BaseName, 1, string:rstr(BaseName, ".") - 1)),
+          io:format("BaseName ~p\n",[BaseName]),
+          io:format("NameWithoutExtension ~p\n",[NameWithoutExtension]),
+          CsvData = read_lines(File, []),
+          {RowCount, ColumnCount} = get_row_column_count(CsvData),
+          io:format("Count Row ~p\n", [RowCount]),
+          io:format("Count Column ~p\n", [ColumnCount]),
+          case new(NameWithoutExtension, RowCount, ColumnCount, 1) of
+            {error, 'sheet already exists'} -> io:format("Foglio già esistente, cambiare il nome \n");
+            _ ->
+              RowCounter = lists:seq(1,RowCount),
+              ColumnCounter = lists:seq(1, ColumnCount),
               lists:foreach(
-                fun(ColumnIndex) ->
-                  ValueString = lists:nth(ColumnIndex, Row),
+                fun(RowIndex) ->
+                  Row = lists:nth(RowIndex, CsvData),
+                  io:format("Row: ~p\n", [Row]),
+                  lists:foreach(
+                    fun(ColumnIndex) ->
+                      ValueString = lists:nth(ColumnIndex, Row),
 %%              io:format("Value is: ~p\n", [ValueString]),
-                  CleanValue = string:strip(ValueString, right, $\n),
+                      CleanValue = string:strip(ValueString, right, $\n),
 %%              io:format("OK - CleanValue is: ~p\n", [CleanValue]),
-                  set(NameWithoutExtension, 1, RowIndex, ColumnIndex, CleanValue)
+                      set(NameWithoutExtension, 1, RowIndex, ColumnIndex, CleanValue)
+                    end,
+                    ColumnCounter)
                 end,
-                ColumnCounter)
-            end,
-            RowCounter),
-          Parent ! {ok, ok}
+                RowCounter),
+              %%  {CsvData, RowCount, ColumnCount},
+              Parent ! {ok, ok}
+          end;
+        {error, Reason} ->  Parent ! {error, Reason}
       end
   end
 .
@@ -620,8 +632,3 @@ info(Name) ->
       {error, not_found}
   end
 .
-
-
-%%% ok timeout per cvs, aggiungere case per open:file perchè se è il file non esiste ritorna:
-%%% {badmatch,{error,enoent}
-
