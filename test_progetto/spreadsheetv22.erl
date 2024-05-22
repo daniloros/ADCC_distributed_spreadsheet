@@ -405,7 +405,8 @@ to_csv(SpreadsheetName, Timeout) ->
   Parent = self(),
   Caller = spawn(fun() -> do_to_cvs(SpreadsheetName, Parent) end),
   receive
-    {csv_data, Data} -> {ok, Data}
+    {csv_data, Data} -> {ok, Data};
+    {error, Reason} -> {error, Reason}
   after Timeout ->
     exit(Caller, kill),
     {error, timeout}
@@ -427,9 +428,9 @@ do_to_cvs(SpreadsheetName, Parent) ->
             [Sheet] ->
               SheetPages = Sheet#sheet.sheet_page_ids,
               io:format("SheetPages ~p\n", [SheetPages]),
-              lists:foreach(fun(Page) -> export_page_to_cvs(SpreadsheetName, Page,Parent) end, SheetPages),
+              lists:foreach(fun(Page) -> export_page_to_cvs(SpreadsheetName,Page,Parent) end, SheetPages),
               ok;
-            {error, Reason} -> {error, Reason}
+            {error, Reason} -> Parent ! {error, Reason}
           end
   end
 .
