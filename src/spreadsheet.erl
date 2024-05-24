@@ -11,8 +11,8 @@
 
 
 -record(cell, {id, row, column, value}).
--record(sheet_page, {name, cells_ids=[]}).
--record(sheet, {name, sheet_page_ids=[], owner_pid, access_policies=[]}).
+-record(tab, {name, cells_ids=[]}).
+-record(sheet, {name, tab_ids=[], owner_pid, access_policies=[]}).
 
 
 
@@ -22,42 +22,31 @@
 
 
 init() ->
+  Nodes= nodes() ++ [node()],
   mnesia:create_schema([node()|nodes()]),
   mnesia:start(),
-  create_tables(),
+  create_tables(Nodes),
   mnesia:stop()
 .
 
-create_tables() ->
-  mnesia:create_table(cell, [{attributes, record_info(fields, cell)}]),
-  mnesia:create_table(sheet_page, [{attributes, record_info(fields, sheet_page)}]),
-  mnesia:create_table(sheet, [{attributes, record_info(fields, sheet)}])
+create_tables(Nodes) ->
+  mnesia:create_table(cell, [{attributes, record_info(fields, cell)},{disc_copies,Nodes}]),
+  mnesia:create_table(tab, [{attributes, record_info(fields, tab)},{disc_copies,Nodes}]),
+  mnesia:create_table(sheet, [{attributes, record_info(fields, sheet)},{disc_copies,Nodes}])
 .
 
 start() ->
+  Nodes= nodes() ++ [node()],
   mnesia:start(),
-  mnesia:wait_for_tables([sheet,sheet_page,cell], 20000)
+  mnesia:change_config(extra_db_nodes, Nodes),
+  mnesia:wait_for_tables([sheet,tab,cell], 20000)
 .
 
 
 new(Name) ->
   new(Name, 6, 3, 1)
 .
-%%%-------------------------------------------------------------------
-%%% L'idea è avere una struttura fatta in questo modo:
-%%% #sheet:
-%%%   #sheet_page (TAB):
-%%%     #celle
-%%%  #sheet_page (TAB):
-%%%     #celle
-%%%  e cosi via..
 
-%%% Quindi come prima cosa creo le celle. Ogni cella dovrà avere un id differente
-%%%   e questo id lo userò come riferimento per collegarlo ai Tab
-%%% Ogni tab quindi conterrà il riferimento alle celle e dovrà avere un id univoco,
-%%%   l'id lo userò come riferimento per collegarlo al foglio
-%%% Infine creo il foglio con il suo nome e conterrà il riferimento ai sui tab
-%%%-------------------------------------------------------------------
 new(Name, N, M, K) ->
   %% controllo se stiamo cercando di inserire un foglio già esistente
   case sheet_alredy_exists(Name) of
@@ -69,10 +58,10 @@ new(Name, N, M, K) ->
         {atomic, CellIds} = mnesia:transaction(fun() -> populate_cell(Name, K, N, M) end),
         %% avendo il riferimento per ogni singola cella creo il tab
         F = fun() ->
-          populate_sheet_page(Name, K, CellIds),
+          populate_tab(Name, K, CellIds),
           SheetPageRef = lists:seq(1,K),
           %% creato il TAB, infine creo lo Sheet
-          Sheet = #sheet{name = Name, sheet_page_ids = SheetPageRef, owner_pid = node()},
+          Sheet = #sheet{name = Name, tab_ids = SheetPageRef, owner_pid = node()},
           mnesia:write(Sheet)
             end,
         {atomic, Val} = mnesia:transaction(F),
@@ -83,22 +72,22 @@ new(Name, N, M, K) ->
   end
 .
 
-populate_cell(NameSheet, NumSheetPage, NumRows, NumColumns) ->
+populate_cell(NameSheet, NumTab, NumRows, NumColumns) ->
   %% creo le liste per poter ciclare prima sul numero di tab
   %% per ogni tab ciclerò sulle righe
   %% per ogni riga ciclerò sulle colonne e creo l'effettiva cella
   Rows = lists:seq(1, NumRows),
   Columns = lists:seq(1, NumColumns),
-  SheetPageNumber = lists:seq(1,NumSheetPage),
+  TabNumber = lists:seq(1,NumTab),
   CellIds = lists:foldl(
-    fun(Sheet, Acc) ->
-      PageName = lists:concat([atom_to_list(NameSheet), integer_to_list(Sheet)]),
+    fun(Tab, Acc) ->
+      TabName = lists:concat([atom_to_list(NameSheet), integer_to_list(Tab)]),
       SheetCellIds = lists:foldl(
         fun(Row, AccRows) ->
           RowCellIds = lists:foldl(
             fun(Column, AccColumns) ->
               Cell = #cell{
-                id = {PageName, Row, Column},
+                id = {TabName, Row, Column},
                 row = Row,
                 column = Column,
 %%                value = undefined
@@ -113,19 +102,18 @@ populate_cell(NameSheet, NumSheetPage, NumRows, NumColumns) ->
         [], Rows),
       SheetCellIds ++ Acc
     end,
-    [], SheetPageNumber),
+    [], TabNumber),
   lists:reverse(CellIds)
 .
 
 
-populate_sheet_page(SheetPageNumber, NumberSheetPage, RefCell) ->
+populate_tab(SheetPageName, NumberTab, RefCell) ->
   %% prendo il numero di TAB da creare
-  Number = lists:seq(1, NumberSheetPage),
+  Number = lists:seq(1, NumberTab),
   %% per ognuna di esse creo il TAB
   lists:foreach(
     fun(K) ->
-      PageName = lists:concat([atom_to_list(SheetPageNumber), integer_to_list(K)]),
-
+      TabName = lists:concat([atom_to_list(SheetPageName), integer_to_list(K)]),
       %% se creo celle con 2 tab o più devo filtrare. Questo perchè se non faccio il filtro
       %% ogni tab avrebbe il riferimento a tutte le celle anche di altre tab
       %% ad esempio :
@@ -137,14 +125,14 @@ populate_sheet_page(SheetPageNumber, NumberSheetPage, RefCell) ->
       PageCellIds = lists:filter(
         fun(Cell) ->
           case Cell of
-            %% se inizia con il PageName che mi interessa allora true
-            {PageName, _, _} -> true;
+            %% se inizia con il TabName che mi interessa allora true
+            {TabName, _, _} -> true;
             _ -> false
           end
         end,
         RefCell),
-      SheetPage = #sheet_page{name = PageName, cells_ids = PageCellIds},
-      mnesia:write(SheetPage)
+      Tab = #tab{name = TabName, cells_ids = PageCellIds},
+      mnesia:write(Tab)
     end,
     Number)
 .
@@ -168,33 +156,52 @@ get_sheet(SpreadsheetName) ->
 .
 
 %%% AccessPolicies, da specifiche sono una lista,
-%%% quindi ad esempio chiamato con [{Pid,AC},{Pid2,AC}]
+%%% quindi ad esempio chiamato con [{node(),AC},{node(),AC}]
 %%% Altrimenti se non passo la lista non funziona
 share(SpreadsheetName, AccessPolicies) ->
   Node = node(),
-  F = fun() ->
-    case mnesia:read({sheet, SpreadsheetName}) of
-      %% torna una lista di sheet
-      [Sheet] ->
-        %% controllo se chi chiama l'operazione è l'admin del foglio
-        %% poichè solo in questo caso può effettuare la modifica degli accessPolicy
-        case Sheet#sheet.owner_pid =:= Node of
-          true ->
-            %% effettuo il controllo sugli AccessPolicies, cioè controllo se sono da modificare o inserirne nuovi
-            NewAccessPolicies = update_access_policies(Sheet#sheet.access_policies, AccessPolicies),
-            %% scrivo le nuove policy
-            NewSheet = Sheet#sheet{access_policies = NewAccessPolicies},
-            mnesia:write(NewSheet),
-            ok;
-          false -> {error, not_admin}
-        end;
-      [] ->
-        {error, not_found}
-    end
-      end,
-  TransactionResult = mnesia:transaction(F),
-  TransactionResult
+  case check_format(AccessPolicies) of
+    true ->
+      F = fun() ->
+            case mnesia:read({sheet, SpreadsheetName}) of
+              %% torna una lista di sheet
+              [Sheet] ->
+                %% controllo se chi chiama l'operazione è l'admin del foglio
+                %% poichè solo in questo caso può effettuare la modifica degli accessPolicy
+                case Sheet#sheet.owner_pid =:= Node of
+                  true ->
+                    %% effettuo il controllo sugli AccessPolicies, cioè controllo se sono da modificare o inserirne nuovi
+                    NewAccessPolicies = update_access_policies(Sheet#sheet.access_policies, AccessPolicies),
+                    %% scrivo le nuove policy
+                    NewSheet = Sheet#sheet{access_policies = NewAccessPolicies},
+                    mnesia:write(NewSheet),
+                    ok;
+                  false -> {error, not_admin}
+                end;
+              [] ->
+                {error, not_found}
+            end
+          end,
+      TransactionResult = mnesia:transaction(F),
+      TransactionResult;
+    false -> io:format("hai inserito un formato sbagliato per gli AccessPolicies, la chiamata deve avere questo formato:
+    :share(nomeFoglio,[{_,_},{_,_}]\n")
+  end
 .
+
+check_format([]) ->
+  %% Se la lista è vuota, restituisci true.
+  true;
+
+check_format([{User, _} | Rest]) when is_atom(User) ->
+  %% Se il formato di questa tupla è corretto, controlla il resto della lista
+  io:format("Rest ~p\n", [Rest]),
+  check_format(Rest);
+
+check_format(_) ->
+  %% Se il formato non è corretto, restituisci false.
+  false.
+
 
 update_access_policies(OldPolicies, NewPolicies) ->
   %% itero sulle OldPolicies e accumolo le modifiche
@@ -265,9 +272,9 @@ get(Name, Tab, Row, Column,Timeout) ->
   Node = node(),
   case check_policy_access(Name, Node) of
     {_, _} ->
-      PageName = lists:concat([atom_to_list(Name), integer_to_list(Tab)]),
+      TabName = lists:concat([atom_to_list(Name), integer_to_list(Tab)]),
       %% creo il riferimento al chiamante per poterlo killare nel caso in cui finisca in timeout
-      Caller = spawn(fun() -> do_get(PageName, Row, Column, Self) end),
+      Caller = spawn(fun() -> do_get(TabName, Row, Column, Self) end),
       receive
         {result, Result} ->
           {ok, Result};
@@ -284,9 +291,9 @@ get(Name, Tab, Row, Column,Timeout) ->
 .
 
 %% metodo che legge il valore in cella e fa il send verso processo che lo ha richiesto
-do_get(PageName, Row, Column, Ref) ->
+do_get(TabName, Row, Column, Ref) ->
   timer:sleep(2000),
-  case mnesia:dirty_read(cell, {PageName, Row, Column}) of
+  case mnesia:dirty_read(cell, {TabName, Row, Column}) of
     [Cell] ->
       Result = Cell#cell.value,
       Ref ! {result, Result}; % Invia il risultato al processo chiamante
@@ -299,12 +306,12 @@ do_get(PageName, Row, Column, Ref) ->
 %% come per il get ho bisogno del node() per accedere alla lista delle policy
 set(Name,Tab,Row,Column, Value) ->
   Node = node(),
-  PageName = lists:concat([atom_to_list(Name), integer_to_list(Tab)]),
+  TabName = lists:concat([atom_to_list(Name), integer_to_list(Tab)]),
   case check_policy_access(Name, Node) of
     %% se ho i diritti di write procedo con la scrittura
     {_,write} ->
       F = fun() ->
-        case mnesia:read(cell, {PageName,Row,Column}) of
+        case mnesia:read(cell, {TabName,Row,Column}) of
           [Cell] ->
             UpdateCell = Cell#cell{value = Value},
             mnesia:write(UpdateCell);
@@ -319,7 +326,7 @@ set(Name,Tab,Row,Column, Value) ->
     {_,true} ->
       %% in questo caso sono il proprietario del documento e quindi posso scrivere
       F = fun() ->
-        case mnesia:read(cell, {PageName,Row,Column}) of
+        case mnesia:read(cell, {TabName,Row,Column}) of
           [Cell] ->
             UpdateCell = Cell#cell{value = Value},
             mnesia:write(UpdateCell);
@@ -344,22 +351,39 @@ set(Name,Tab,Row,Column, Value, Timeout) ->
   %% prendo il pid del processo chiamante, uso del do_set per fare la send del risultato
   Self = self(),
   Node = node(),
-  PageName = lists:concat([atom_to_list(Name), integer_to_list(Tab)]),
+  TabName = lists:concat([atom_to_list(Name), integer_to_list(Tab)]),
   case check_policy_access(Name, Node) of
     {_,write} ->
       %% caso in cui ho le policy di scrittura
       %% riferimento al Caller per poterlo killare in caso di timeout
-      Caller = spawn(fun() -> do_set(PageName, Row, Column, Value, Self) end),
+      Caller = spawn(fun() -> do_set(TabName, Row, Column, Value, Self) end),
       receive_response(Caller, Timeout);
     {_,true} ->
       %% caso in cui sono l'owner del file e quindi posso scrivere
       %% riferimento al Caller per poterlo killare in caso di timeout
-      Caller = spawn(fun() -> do_set(PageName, Row, Column, Value, Self) end),
+      Caller = spawn(fun() -> do_set(TabName, Row, Column, Value, Self) end),
       receive_response(Caller, Timeout);
     {_,read} -> io:format("Puoi solo leggere il file\n");
     {_,_} -> {error, wrong_policies};
     not_found -> io:format("ERROR - spreadsheet non esistente\n");
     false -> io:format("ERROR - Non hai i diritti per accedere al file\n")
+  end
+.
+
+%% metodo che effettua la write sulla cella
+do_set(TabName, Row, Column, Value, Ref) ->
+  timer:sleep(2000),
+  F = fun() ->
+    %% recupero la cella, setto il nuovo valore e faccio la write
+    [Cell] = mnesia:read(cell, {TabName,Row,Column}),
+    UpdateCell = Cell#cell{value = Value},
+    mnesia:write(UpdateCell)
+      end,
+  Result = mnesia:transaction(F),
+  case Result of
+    {atomic, ok} -> Ref!{ok, true};
+    {atomic, {error, not_found}} -> Ref!{error, not_found};
+    {aborted, _Reason} -> Ref!{error, error}
   end
 .
 
@@ -372,23 +396,6 @@ receive_response(Caller, Timeout) ->
     exit(Caller, kill),
     {error, timeout}
   end.
-
-%% metodo che effettua la write sulla cella
-do_set(PageName, Row, Column, Value, Ref) ->
-  timer:sleep(2000),
-  F = fun() ->
-    %% recupero la cella, setto il nuovo valore e faccio la write
-    [Cell] = mnesia:read(cell, {PageName,Row,Column}),
-    UpdateCell = Cell#cell{value = Value},
-    mnesia:write(UpdateCell)
-      end,
-  Result = mnesia:transaction(F),
-  case Result of
-    {atomic, ok} -> Ref!{ok, true};
-    {atomic, {error, not_found}} -> Ref!{error, not_found};
-    {aborted, _Reason} -> Ref!{error, error}
-  end
-.
 
 %% funzione per convertire il file csv
 to_csv(SpreadsheetName) ->
@@ -418,15 +425,15 @@ do_to_cvs(SpreadsheetName, Parent) ->
         [Sheet] ->
           %% recuperato lo sheet controllo da quante TAB è composto e per ogni tab genero un file .cvs
           %% questo perchè un file .csv non ha diversi fogli come ad esempio excel che permette di farlo
-          SheetPages = Sheet#sheet.sheet_page_ids,
-          lists:foreach(fun(Page) -> export_page_to_cvs(SpreadsheetName, Page, Parent) end, SheetPages),
+          SheetTabs = Sheet#sheet.tab_ids,
+          lists:foreach(fun(Tab) -> export_page_to_cvs(SpreadsheetName, Tab, Parent) end, SheetTabs),
           ok;
         {error, Reason} -> {error, Reason}
       end;
     _ ->  case get_sheet(SpreadsheetName) of
             [Sheet] ->
-              SheetPages = Sheet#sheet.sheet_page_ids,
-              lists:foreach(fun(Page) -> export_page_to_cvs(SpreadsheetName,Page,Parent) end, SheetPages),
+              SheetTabs = Sheet#sheet.tab_ids,
+              lists:foreach(fun(Tab) -> export_page_to_cvs(SpreadsheetName,Tab,Parent) end, SheetTabs),
               ok;
             {error, Reason} -> Parent ! {error, Reason}
           end
@@ -434,12 +441,12 @@ do_to_cvs(SpreadsheetName, Parent) ->
 .
 
 %% funzione che genera il file .csv
-%% devo recuperare lo sheet_page cioè il TAB, in questo modo ottengo l'id delle celle
+%% devo recuperare il tab, in questo modo ottengo l'id delle celle
 %% l'id delle celle verrà usato per recuperare le righe
-export_page_to_cvs(SpreadsheetName,PageName, Parent) ->
-  NewPageName = lists:concat([atom_to_list(SpreadsheetName), integer_to_list(PageName)]),
-  case mnesia:dirty_read(sheet_page, NewPageName) of
-    [{sheet_page, _, CellIds}] ->
+export_page_to_cvs(SpreadsheetName,TabName, Parent) ->
+  NewTabName = lists:concat([atom_to_list(SpreadsheetName), integer_to_list(TabName)]),
+  case mnesia:dirty_read(tab, NewTabName) of
+    [{tab, _, CellIds}] ->
       %% prendo le righe per ogni cellIds %%
       RowNumbers = [Row || {_, Row, _} <- CellIds],
 
@@ -453,7 +460,7 @@ export_page_to_cvs(SpreadsheetName,PageName, Parent) ->
       CsvRows = lists:map(
         fun(Row) ->
           %% get_row_values tornerà il valore per ogni riga
-          RowValues = get_row_values(NewPageName, Row),
+          RowValues = get_row_values(NewTabName, Row),
           %% per ogni elemento nella riga lo converto nel suo tipo
           RowStrings = [case X of
                           Num when is_number(Num) -> integer_to_list(Num);
@@ -473,7 +480,7 @@ export_page_to_cvs(SpreadsheetName,PageName, Parent) ->
 
       CsvContent = lists:flatten(CsvRows),
       StringSpreadsheetName = atom_to_list(SpreadsheetName),
-      FilePath = StringSpreadsheetName ++ "_" ++ integer_to_list(PageName) ++ ".csv",
+      FilePath = StringSpreadsheetName ++ "_" ++ integer_to_list(TabName) ++ ".csv",
       file:write_file(FilePath, CsvContent),
       case Parent of
         null ->  {ok, FilePath};
@@ -607,13 +614,13 @@ info(Name) ->
       %% e quindi riporto il numero di celle x tab
       TabCellCounts = lists:map(fun(Tab) ->
                                   PageName = lists:concat([atom_to_list(Name), integer_to_list(Tab)]),
-                                  case mnesia:dirty_read(sheet_page, PageName) of
-                                    [{sheet_page, _, CellIds}] ->
+                                  case mnesia:dirty_read(tab, PageName) of
+                                    [{tab, _, CellIds}] ->
                                       {length(CellIds),Tab};
                                     _ ->
                                       {Tab, 0}
                                   end
-                                end, Sheet#sheet.sheet_page_ids),
+                                end, Sheet#sheet.tab_ids),
       io:format("numero di celle x tab: ~p\n", [TabCellCounts]);
     _ ->
       {error, not_found}
