@@ -14,20 +14,23 @@
 
 
 init() ->
+  Nodes= nodes() ++ [node()],
   mnesia:create_schema([node()|nodes()]),
   mnesia:start(),
-  create_tables(),
+  create_tables(Nodes),
   mnesia:stop()
 .
 
-create_tables() ->
-  mnesia:create_table(cell, [{attributes, record_info(fields, cell)}]),
-  mnesia:create_table(sheet_page, [{attributes, record_info(fields, sheet_page)}]),
-  mnesia:create_table(sheet, [{attributes, record_info(fields, sheet)}])
+create_tables(Nodes) ->
+  mnesia:create_table(cell, [{attributes, record_info(fields, cell)},{disc_copies,Nodes}]),
+  mnesia:create_table(sheet_page, [{attributes, record_info(fields, sheet_page)},{disc_copies,Nodes}]),
+  mnesia:create_table(sheet, [{attributes, record_info(fields, sheet)},{disc_copies,Nodes}])
 .
 
 start() ->
+  Nodes= nodes() ++ [node()],
   mnesia:start(),
+  mnesia:change_config(extra_db_nodes, Nodes),
   mnesia:wait_for_tables([sheet,sheet_page,cell], 20000)
 .
 
@@ -89,7 +92,7 @@ populate_cell(NameSheet, NumSheetPage, NumRows, NumColumns) ->
                 row = Row,
                 column = Column,
 %%                value = undefined
-                value = rand:uniform(100)
+                value = ''
               },
               mnesia:write(Cell),
               [Cell#cell.id | AccColumns]
@@ -154,7 +157,14 @@ get_sheet(SpreadsheetName) ->
 
 .
 
+%%% AccessPolicies deve essere una lista, quindi ad esempio chiamato con [{Pid,AC},{Pid2,AC}]
+%%% Altrimenti se non passo la lista non funziona
 share(SpreadsheetName, AccessPolicies) ->
+  case check_format(AccessPolicies) of
+    true -> io:format("true\n"),ok;
+    false  ->  io:format("false\n"),false
+  end,
+  io:format("AccessPolicies ~p\n", [AccessPolicies]),
   Node = node(),
   io:format("self ~p\n", [Node]),
   F = fun() ->
@@ -177,9 +187,23 @@ share(SpreadsheetName, AccessPolicies) ->
     end
       end,
   TransactionResult = mnesia:transaction(F),
-  io:format("Transaction result: ~p\n", [TransactionResult]),
+%%  io:format("Transaction result: ~p\n", [TransactionResult]),
   TransactionResult
 .
+
+check_format([]) ->
+  %% Se la lista è vuota, restituisci true.
+  true;
+
+check_format([{User, _} | Rest]) when is_atom(User) ->
+  %% Se il formato di questa tupla è corretto, controlla il resto della lista
+  io:format("Rest ~p\n", [Rest]),
+  check_format(Rest);
+
+check_format(_) ->
+  %% Se il formato non è corretto, restituisci false.
+  false.
+
 
 update_access_policies(OldPolicies, NewPolicies) ->
   lists:foldl(
