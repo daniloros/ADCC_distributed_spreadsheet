@@ -195,7 +195,6 @@ check_format([]) ->
 
 check_format([{User, _} | Rest]) when is_atom(User) ->
   %% Se il formato di questa tupla è corretto, controlla il resto della lista
-  io:format("Rest ~p\n", [Rest]),
   check_format(Rest);
 
 check_format(_) ->
