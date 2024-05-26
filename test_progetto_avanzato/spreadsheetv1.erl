@@ -93,7 +93,6 @@ populate_cell(NameSheet, NumTab, NumRows, NumColumns) ->
 %%                value = undefined
                 value = rand:uniform(100)
               },
-              io:format("Cell ~p\n", [Cell]),
               mnesia:write(Cell),
               [Cell#cell.id | AccColumns]
             end,
@@ -196,7 +195,6 @@ check_format([]) ->
 
 check_format([{User, _} | Rest]) when is_atom(User) ->
   %% Se il formato di questa tupla è corretto, controlla il resto della lista
-  io:format("Rest ~p\n", [Rest]),
   check_format(Rest);
 
 check_format(_) ->
@@ -205,13 +203,15 @@ check_format(_) ->
 
 
 update_access_policies(OldPolicies, NewPolicies) ->
-  %% itero sulle OldPolicies e accumolo le modifiche
+  %% itero sulle NewPolicies
   lists:foldl(
     fun({NewProc, NewAP}, Acc) ->
-      %% controllo se il Pid del processo è già un Pid esistente nella lista delle Policy esistenti
+      %% controllo se il nodo è gia esistente nella lista delle Policy esistenti
       case lists:keymember(NewProc, 1, OldPolicies) of
         true ->
           %% se esiste allora faccio un update
+          %% Cerca in Acc se nella posizione 1 c'è NewProcc
+          %% se c'è sostiuisce con i nuovi {NwProcc,NewAP}
           lists:keyreplace(NewProc, 1, Acc, {NewProc, NewAP});
         false ->
           %% se non esiste allora lo aggiungo
@@ -449,11 +449,11 @@ export_page_to_cvs(SpreadsheetName,TabName, Parent) ->
   case mnesia:dirty_read(tab, NewTabName) of
     [{tab, _, CellIds}] ->
       %% prendo le righe per ogni cellIds %%
-      RowNumbers = [Row || {_, Row, _} <- CellIds],
+      CellForRow = [Row || {_, Row, _} <- CellIds],
 
       %% mi resituirà una lista fatta in questo modo: [1,1,1,2,2,2,3,3,3,4,4,4,5,5,5,6,6,6]
       %% devo quindi eliminare i duplicati
-      Rows = lists:usort(RowNumbers),
+      Rows = lists:usort(CellForRow),
 
       %% costruisco il csv in modo tale che sarà composto da Elementi_riga_1 \n elementi_riga_2 e cosi vià
       %% Quindi per ogni riga ho bisogno di prendere il valore e manipolarli per costruire il .csv
@@ -462,9 +462,11 @@ export_page_to_cvs(SpreadsheetName,TabName, Parent) ->
         fun(Row) ->
           %% get_row_values tornerà il valore per ogni riga
           RowValues = get_row_values(NewTabName, Row),
-          %% per ogni elemento nella riga lo converto nel suo tipo
+          %% per ogni elemento nella riga lo converto dal suo tipo in una stringa
+          %% necessario per avere i valori comprensibili
           RowStrings = [case X of
-                          Num when is_number(Num) -> integer_to_list(Num);
+                          Num when is_integer(Num) -> integer_to_list(Num);
+                          Float when is_float(Float) -> io_lib:format("~.2f", [Float]);
                           Str when is_list(Str) -> Str;
                           Atom when is_atom(Atom) -> atom_to_list(Atom)
                         end || X <- RowValues],
@@ -495,9 +497,9 @@ export_page_to_cvs(SpreadsheetName,TabName, Parent) ->
   end
 .
 
-get_row_values(SpreadsheetName, Rows) ->
+get_row_values(TabName, Rows) ->
   %% faccio la query per cercare tutte le righe %%
-  RowCells = mnesia:dirty_match_object({cell, {SpreadsheetName, Rows, '_'}, '_', '_', '_'}),
+  RowCells = mnesia:dirty_match_object({cell, {TabName, Rows, '_'}, '_', '_', '_'}),
 
   %% costretto ad ordinare RowCells, altrimenti il dirty_match_object non torna dati ordinati ad esempio:
   %% RowCells [{cell,{"foglio1",1,1},1,1,84},
@@ -509,12 +511,12 @@ get_row_values(SpreadsheetName, Rows) ->
   [Value || #cell{value = Value} <- SortedCells].
 
 
-%% funzione che preso un file .cvs ne crea il corrispettivo in Mnesia
+%% funzione che preso un file .cvs popola la tabella in Mnesia
 from_cvs(FilePath) ->
   do_from_cvs(FilePath,null)
 .
 
-%% funzione che preso un file .cvs ne crea il corrispettivo in Mnesia ma con TIMEOUT
+%% funzione che preso un file .cvs popola la tabella in Mnesia + TIMEOUT
 from_cvs(FilePath, Timeout) ->
   Parent = self(),
   Caller = spawn(fun() -> do_from_cvs(FilePath, Parent) end),
@@ -553,12 +555,13 @@ do_from_cvs(FilePath, Parent) ->
               Row = lists:nth(RowIndex, CsvData),
               lists:foreach(
                 fun(ColumnIndex) ->
-                  %% allo stesso modo, fissata la riga, devo prendere il valore corretto sulla colonna interessata
+                  %% allo stesso modo, fissata la riga, devo prendere il valore corretto sull'indice della colonna interessata
                   ValueString = lists:nth(ColumnIndex, Row),
                   %% pulisco lo \n presente nella stringa
                   CleanValue = string:strip(ValueString, right, $\n),
+                  ParsedValue = parse_value(CleanValue),
                   %% ora scriverò il valore nella cella corrispondente
-                  set(NameWithoutExtension, 1, RowIndex, ColumnIndex, CleanValue)
+                  set(NameWithoutExtension, 1, RowIndex, ColumnIndex, ParsedValue)
                 end,
                 ColumnCounter)
             end,
@@ -579,10 +582,14 @@ do_from_cvs(FilePath, Parent) ->
 
 
 read_lines(File, Acc) ->
+  %% lettura di una riga
   case file:read_line(File) of
     {ok, Line} ->
-      %% leggo riga per riga, creando una lista di stringhe divise dalla virgola
+      %% letta la riga, ad esempio: "80,3,17\n"
+      %% devo dividere ogni singolo elemento, cioè devo avere singolarmente 80 poi 3 poi 17
+      %% quindi tokenizzo la stringa
       Tokens = string:tokens(Line, ","),
+      %% chiamo ricorsivamente per aggiungere elementi alla lista
       read_lines(File, [Tokens | Acc]);
     eof ->
       %% fine del file, quindi chiudo
@@ -600,6 +607,21 @@ get_row_column_count(CsvData) ->
   %% numero di colonne, prendo la lunghezza della prima riga
   ColumnCount = length(hd(CsvData)),
   {RowCount, ColumnCount}.
+
+parse_value(Value) ->
+  case catch list_to_integer(Value) of
+    {'EXIT', _} ->
+      case catch list_to_float(Value) of
+        {'EXIT', _} ->
+          case Value of
+            "true" -> true;
+            "false" -> false;
+            _ -> Value
+          end;
+        Float -> Float
+      end;
+    Int -> Int
+  end.
 
 
 %% metodo che torna le informazioni:
