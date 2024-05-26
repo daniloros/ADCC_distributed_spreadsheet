@@ -497,9 +497,9 @@ export_page_to_cvs(SpreadsheetName,TabName, Parent) ->
   end
 .
 
-get_row_values(SpreadsheetName, Rows) ->
+get_row_values(TabName, Rows) ->
   %% faccio la query per cercare tutte le righe %%
-  RowCells = mnesia:dirty_match_object({cell, {SpreadsheetName, Rows, '_'}, '_', '_', '_'}),
+  RowCells = mnesia:dirty_match_object({cell, {TabName, Rows, '_'}, '_', '_', '_'}),
 
   %% costretto ad ordinare RowCells, altrimenti il dirty_match_object non torna dati ordinati ad esempio:
   %% RowCells [{cell,{"foglio1",1,1},1,1,84},
