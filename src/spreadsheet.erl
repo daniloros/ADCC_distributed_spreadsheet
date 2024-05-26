@@ -203,15 +203,15 @@ check_format(_) ->
 
 
 update_access_policies(OldPolicies, NewPolicies) ->
-  %% itero sulle OldPolicies e accumolo le modifiche
+  %% itero sulle NewPolicies
   lists:foldl(
     fun({NewProc, NewAP}, Acc) ->
       %% controllo se il nodo è gia esistente nella lista delle Policy esistenti
       case lists:keymember(NewProc, 1, OldPolicies) of
         true ->
           %% se esiste allora faccio un update
-          %% Cerca in Acc se nella posizione 1 c'è NewProcc un pò come sopra
-          %% se c'è sostiuisce con {NwProcc,NewAP}
+          %% Cerca in Acc se nella posizione 1 c'è NewProcc
+          %% se c'è sostiuisce con i nuovi {NwProcc,NewAP}
           lists:keyreplace(NewProc, 1, Acc, {NewProc, NewAP});
         false ->
           %% se non esiste allora lo aggiungo
@@ -585,7 +585,9 @@ read_lines(File, Acc) ->
   %% lettura di una riga
   case file:read_line(File) of
     {ok, Line} ->
-      %% divido la riga in una lista di stringhe separate da ,
+      %% letta la riga, ad esempio: "80,3,17\n"
+      %% devo dividere ogni singolo elemento, cioè devo avere singolarmente 80 poi 3 poi 17
+      %% quindi tokenizzo la stringa
       Tokens = string:tokens(Line, ","),
       %% chiamo ricorsivamente per aggiungere elementi alla lista
       read_lines(File, [Tokens | Acc]);
