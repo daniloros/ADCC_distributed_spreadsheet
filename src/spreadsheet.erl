@@ -90,8 +90,8 @@ populate_cell(NameSheet, NumTab, NumRows, NumColumns) ->
                 id = {TabName, Row, Column},
                 row = Row,
                 column = Column,
-%%                value = undefined
-                value = rand:uniform(100)
+                value = ''
+%%                value = rand:uniform(100)
               },
               mnesia:write(Cell),
               [Cell#cell.id | AccColumns]
